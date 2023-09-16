@@ -7,7 +7,11 @@ module Graphex.Cabal
   ( discoverCabalModules
   , discoverCabalModuleGraph
   , CabalDiscoverOpts (..)
-  , CabalModuleType (..)
+  , CabalDiscoverType (..)
+  , CabalUnit (..)
+  , CabalUnitType (..)
+  , Discovery (..)
+  , discoversUnit
   ) where
 
 import           Graphex.Core
@@ -17,7 +21,6 @@ import           Control.Monad                                 (guard)
 import           Data.Foldable                                 (fold)
 import           Data.List                                     (intersperse)
 import           Data.Maybe                                    (maybeToList)
-import           Data.Set                                      (Set)
 import qualified Data.Set                                      as Set
 import           Data.String                                   (fromString)
 import           Data.Traversable                              (for)
@@ -70,19 +73,19 @@ discoverCabalModules CabalDiscoverOpts{..} cabalFile = do
   let PackageDescription{..} = flattenPackageDescription gpd
   let candidateModules = mconcat
         [ do
-            guard $ Set.member CabalLibraries toDiscover
             Library{..} <- mconcat [maybeToList library, subLibraries]
             srcDir <- hsSourceDirs libBuildInfo
             exMod <- exposedModules
+            guard $ Discovered == foldMap (`discoversUnit` CabalLibraryUnit Nothing) toDiscover -- TODO
             pure Module
               { name = fromString $ mconcat $ intersperse "." $ Cabal.components exMod
               , path = ModuleFile $ sourceDirToFilePath srcDir </> Cabal.toFilePath exMod <.> ".hs"
               }
         , do
-            guard $ Set.member CabalExecutables toDiscover
             Executable{..} <- executables
             srcDir <- hsSourceDirs buildInfo
             otherMod <- "Main" : buildInfo.otherModules
+            guard $ Discovered == foldMap (`discoversUnit` CabalExecutableUnit "TODO") toDiscover
             pure Module
               { name = fromString $
                 if otherMod == "Main"
@@ -91,10 +94,11 @@ discoverCabalModules CabalDiscoverOpts{..} cabalFile = do
               , path = ModuleFile $ sourceDirToFilePath srcDir </> Cabal.toFilePath otherMod <.> ".hs"
               }
         , do
-            guard $ Set.member CabalTests toDiscover
             TestSuite{..} <- testSuites
             srcDir <- hsSourceDirs testBuildInfo
             otherMod <- testBuildInfo.otherModules
+            guard $ Discovered == foldMap (`discoversUnit` CabalTestsUnit "TODO") toDiscover
+                                        
             pure Module
               { name = fromString $ mconcat $ intersperse "." $ Cabal.components otherMod
               , path = ModuleFile $ sourceDirToFilePath srcDir </> Cabal.toFilePath otherMod <.> ".hs"
@@ -112,14 +116,49 @@ validateModulePath m = do
     ModuleNoFile -> pure ModuleNoFile
   pure Module {name = m.name, path = path}
 
-data CabalModuleType =
-  CabalLibraries
-  | CabalExecutables
+data CabalUnitType =
+    CabalLibrary
+  | CabalExecutable
   | CabalTests
   deriving stock (Show, Eq, Ord)
 
+data CabalUnit =
+    CabalLibraryUnit (Maybe String)
+  | CabalExecutableUnit String
+  | CabalTestsUnit String
+  deriving stock (Show, Eq, Ord)
+
+data CabalDiscoverType =
+    CabalDiscoverAll CabalUnitType
+  | CabalDiscover CabalUnit
+  | CabalDontDiscoverAll CabalUnitType
+  | CabalDontDiscover CabalUnit
+  deriving stock (Show, Eq, Ord)
+
+data Discovery =
+    Discovered
+  | Hidden
+  | Passed
+  deriving stock (Show, Eq, Ord)
+
+instance Monoid Discovery where
+  mempty = Discovered
+
+instance Semigroup Discovery where
+  _ <> Discovered = Discovered
+  _ <> Hidden = Hidden
+  x <> Passed = x
+
+discoversUnit :: CabalDiscoverType -> CabalUnit -> Discovery
+discoversUnit = curry $ \case
+  (CabalDiscoverAll CabalLibrary, CabalLibraryUnit{}) -> Discovered
+  (CabalDiscoverAll CabalExecutable, CabalExecutableUnit{}) -> Discovered
+  (CabalDiscoverAll CabalTests, CabalTestsUnit{}) -> Discovered
+  (CabalDiscover u1, u2) -> if u1 == u2 then Discovered else Passed
+  _ -> undefined
+
 data CabalDiscoverOpts = CabalDiscoverOpts
-  { toDiscover      :: Set CabalModuleType
+  { toDiscover      :: [CabalDiscoverType]
   , includeExternal :: Bool
   } deriving stock (Show, Eq)
 
