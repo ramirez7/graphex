@@ -17,6 +17,8 @@ module Graphex.Cabal
 import           Graphex.Core
 import           Graphex.Parser
 
+import Data.Semigroup.Foldable
+import Data.List.NonEmpty (NonEmpty)
 import           Control.Monad                                 (guard)
 import           Data.Foldable                                 (fold)
 import           Data.List                                     (intersperse)
@@ -76,7 +78,7 @@ discoverCabalModules CabalDiscoverOpts{..} cabalFile = do
             Library{..} <- mconcat [maybeToList library, subLibraries]
             srcDir <- hsSourceDirs libBuildInfo
             exMod <- exposedModules
-            guard $ Discovered == foldMap (`discoversUnit` CabalLibraryUnit Nothing) toDiscover -- TODO
+            guard $ Discovered == foldMap1 (`discoversUnit` CabalLibraryUnit Nothing) toDiscover -- TODO: Say which library
             pure Module
               { name = fromString $ mconcat $ intersperse "." $ Cabal.components exMod
               , path = ModuleFile $ sourceDirToFilePath srcDir </> Cabal.toFilePath exMod <.> ".hs"
@@ -85,7 +87,7 @@ discoverCabalModules CabalDiscoverOpts{..} cabalFile = do
             Executable{..} <- executables
             srcDir <- hsSourceDirs buildInfo
             otherMod <- "Main" : buildInfo.otherModules
-            guard $ Discovered == foldMap (`discoversUnit` CabalExecutableUnit "TODO") toDiscover
+            guard $ Discovered == foldMap1 (`discoversUnit` CabalExecutableUnit "TODO: Say which exe") toDiscover
             pure Module
               { name = fromString $
                 if otherMod == "Main"
@@ -97,7 +99,7 @@ discoverCabalModules CabalDiscoverOpts{..} cabalFile = do
             TestSuite{..} <- testSuites
             srcDir <- hsSourceDirs testBuildInfo
             otherMod <- testBuildInfo.otherModules
-            guard $ Discovered == foldMap (`discoversUnit` CabalTestsUnit "TODO") toDiscover
+            guard $ Discovered == foldMap1 (`discoversUnit` CabalTestsUnit "TODO: Say which tests") toDiscover
                                         
             pure Module
               { name = fromString $ mconcat $ intersperse "." $ Cabal.components otherMod
@@ -141,24 +143,31 @@ data Discovery =
   | Passed
   deriving stock (Show, Eq, Ord)
 
-instance Monoid Discovery where
-  mempty = Discovered
-
 instance Semigroup Discovery where
   _ <> Discovered = Discovered
   _ <> Hidden = Hidden
   x <> Passed = x
 
+flipDiscover :: Discovery -> Discovery
+flipDiscover = \case
+  Passed -> Passed
+  Hidden -> Discovered
+  Discovered -> Hidden
+
 discoversUnit :: CabalDiscoverType -> CabalUnit -> Discovery
 discoversUnit = curry $ \case
   (CabalDiscoverAll CabalLibrary, CabalLibraryUnit{}) -> Discovered
+  (CabalDiscoverAll CabalLibrary, _) -> Passed
   (CabalDiscoverAll CabalExecutable, CabalExecutableUnit{}) -> Discovered
+  (CabalDiscoverAll CabalExecutable, _) -> Passed
   (CabalDiscoverAll CabalTests, CabalTestsUnit{}) -> Discovered
+  (CabalDiscoverAll CabalTests, _) -> Passed
   (CabalDiscover u1, u2) -> if u1 == u2 then Discovered else Passed
-  _ -> undefined
+  (CabalDontDiscoverAll ty, u) -> flipDiscover $ CabalDiscoverAll ty `discoversUnit` u
+  (CabalDontDiscover u1, u2) -> flipDiscover $ CabalDiscover u1 `discoversUnit` u2
 
 data CabalDiscoverOpts = CabalDiscoverOpts
-  { toDiscover      :: [CabalDiscoverType]
+  { toDiscover      :: NonEmpty CabalDiscoverType
   , includeExternal :: Bool
   } deriving stock (Show, Eq)
 

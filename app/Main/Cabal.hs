@@ -5,6 +5,7 @@ import           Data.Aeson           (encode)
 import qualified Data.ByteString.Lazy as BL
 import           Data.Bool            (bool)
 import           Options.Applicative
+import Data.List.NonEmpty (NonEmpty (..))
 
 import           Graphex.Cabal
 import           Graphex.LookingGlass
@@ -15,6 +16,7 @@ data CabalOptions = CabalOptions
   , optIncludeExternal :: Bool
   } deriving stock Show
 
+-- TODO: Do a left-to-right-preserving discover opts parser
 cabalOptions :: Parser CabalOptions
 cabalOptions = do
   optDiscoverExes <- switch (long "discover-exes" <> help "Discover exe import dependencies")
@@ -24,12 +26,12 @@ cabalOptions = do
 
 runCabal :: CabalOptions -> IO ()
 runCabal CabalOptions{..} = do
-    mg <- discoverCabalModuleGraph CabalDiscoverOpts
-      { toDiscover = mconcat
-          [ [CabalDiscoverAll CabalLibrary]
-          , bool mempty [CabalDiscoverAll CabalExecutable] optDiscoverExes
+  let discoverOpts = CabalDiscoverOpts
+        { toDiscover = CabalDiscoverAll CabalLibrary :| mconcat
+          [ bool mempty [CabalDiscoverAll CabalExecutable] optDiscoverExes
           , bool mempty [CabalDiscoverAll CabalTests] optDiscoverTests
           ]
-      , includeExternal = optIncludeExternal
-      }
-    BL.putStr $ encode $ toLookingGlass "Internal Package Dependencies" mempty mg
+        , includeExternal = optIncludeExternal
+        }
+  mg <- discoverCabalModuleGraph discoverOpts
+  BL.putStr $ encode $ toLookingGlass "Internal Package Dependencies" mempty mg
